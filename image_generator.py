@@ -13,10 +13,11 @@ import time
 st.set_page_config(
     page_title="AI Image Generator Chat",
     page_icon="🎨",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom CSS for terminal-like appearance
+# Custom CSS for terminal-like appearance and better UI
 st.markdown("""
 <style>
 .terminal-text {
@@ -27,185 +28,205 @@ st.markdown("""
     border-radius: 5px;
     margin: 5px 0;
 }
-.command-text {
-    color: #ffff00;
-}
-.system-message {
-    color: #00ffff;
-}
-.error-message {
-    color: #ff0000;
+.command-text { color: #ffff00; }
+.system-message { color: #00ffff; }
+.error-message { color: #ff0000; }
+.success-message { color: #00ff00; }
+.stButton > button {
+    width: 100%;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
-def terminal_print(message: str, message_type: str = "info"):
-    """Display a terminal-like message in the chat."""
-    color_class = {
-        "info": "system-message",
-        "command": "command-text",
-        "error": "error-message",
-        "success": "system-message"
-    }.get(message_type, "system-message")
+class ImageGeneratorChat:
+    """Main class for the Image Generator Chat Application"""
     
-    return f'<div class="terminal-text"><span class="{color_class}">{message}</span></div>'
-
-
-def respond(conversation: List[Dict], model: str = "gpt-4", temperature: float = 0.7) -> str:
-    """
-    Simple implementation of the respond function using OpenAI API.
-    Replace this with your actual utils.openai_responses.respond if needed.
-    """
-    try:
-        client = OpenAI(api_key=st.session_state.api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=conversation,
-            temperature=temperature
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"Error calling OpenAI API: {str(e)}")
-        return ""
-
-
-def save_generation_metadata(folder: str, data: Dict[str, Any]) -> None:
-    """Save metadata about the generation run to a text file."""
-    metadata_file = os.path.join(folder, "generation_info.txt")
-    
-    with open(metadata_file, 'w', encoding='utf-8') as f:
-        f.write("=" * 70 + "\n")
-        f.write("IMAGE GENERATION METADATA\n")
-        f.write("=" * 70 + "\n\n")
+    def __init__(self):
+        self.initialize_session_state()
         
-        f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        if 'original_prompt' in data:
-            f.write("ORIGINAL PROMPT:\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"{data['original_prompt']}\n\n")
-        
-        if 'clarifying_questions' in data and data['clarifying_questions']:
-            f.write("CLARIFYING QUESTIONS:\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"{data['clarifying_questions']}\n\n")
-        
-        if 'user_answers' in data and data['user_answers']:
-            f.write("USER ANSWERS:\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"{data['user_answers']}\n\n")
-        
-        if 'generated_prompts' in data:
-            f.write("GENERATED PROMPTS:\n")
-            f.write("-" * 70 + "\n")
-            for i, prompt in enumerate(data['generated_prompts'], 1):
-                f.write(f"{i}. {prompt}\n\n")
-        
-        f.write("=" * 70 + "\n")
-    
-    return metadata_file
-
-
-async def generate_image_async(
-    prompt: str, 
-    index: int, 
-    total: int, 
-    run_folder: str,
-    api_key: str,
-    model: str = "dall-e-3",
-    size: str = "1024x1024",
-    quality: str = "standard"
-) -> Dict[str, Any]:
-    """Generate a single image using OpenAI's DALL-E API asynchronously."""
-    os.makedirs(run_folder, exist_ok=True)
-    
-    try:
-        st.session_state.messages.append({
-            "role": "system",
-            "content": terminal_print(f"[{index}/{total}] Starting: {prompt[:60]}...", "command")
-        })
-        
-        # Create async client with the API key
-        async_client = AsyncOpenAI(api_key=api_key)
-        
-        # Make async API request
-        response = await async_client.images.generate(
-            model=model,
-            prompt=prompt,
-            n=1,
-            size=size,
-            quality=quality,
-            response_format="b64_json"
-        )
-        
-        # Decode and save image
-        image_bytes = base64.b64decode(response.data[0].b64_json)
-        
-        # Create safe filename
-        safe_prompt = "".join(c for c in prompt[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
-        safe_prompt = safe_prompt.replace(' ', '_')
-        filename = f"{index:02d}_{safe_prompt}.png"
-        filepath = os.path.join(run_folder, filename)
-        
-        # Save image
-        with open(filepath, "wb") as f:
-            f.write(image_bytes)
-        
-        st.session_state.messages.append({
-            "role": "system",
-            "content": terminal_print(f"[{index}/{total}] ✅ Completed: {filepath}", "success")
-        })
-        
-        return {
-            'success': True,
-            'filepath': filepath,
-            'prompt': prompt,
-            'image_bytes': image_bytes
+    def initialize_session_state(self):
+        """Initialize all session state variables"""
+        defaults = {
+            "messages": [],
+            "api_key": None,
+            "current_prompts": [],
+            "original_prompt": "",
+            "generation_state": "idle",
+            "generated_images": [],
+            "clarifying_questions": "",
+            "user_answers": "",
+            "awaiting_response": None,
+            "generation_counter": 0,
+            "session_folder": None,
+            "russian_guardrail": False,
+            "num_variations": 3
         }
         
-    except Exception as e:
-        error_msg = f"[{index}/{total}] ❌ Error: {str(e)}"
-        st.session_state.messages.append({
-            "role": "system",
-            "content": terminal_print(error_msg, "error")
-        })
-        return {
-            'success': False,
-            'filepath': None,
-            'prompt': prompt,
-            'error': str(e)
+        for key, default_value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = default_value
+    
+    def terminal_print(self, message: str, message_type: str = "info") -> str:
+        """Display a terminal-like message"""
+        color_map = {
+            "info": "system-message",
+            "command": "command-text",
+            "error": "error-message",
+            "success": "success-message"
         }
-
-
-async def generate_images_concurrent(prompts: List[str], run_folder: str, api_key: str) -> List[Dict[str, Any]]:
-    """Generate multiple images concurrently using asyncio."""
-    total = len(prompts)
+        color_class = color_map.get(message_type, "system-message")
+        return f'<div class="terminal-text"><span class="{color_class}">{message}</span></div>'
     
-    tasks = [
-        generate_image_async(prompt, i + 1, total, run_folder, api_key)
-        for i, prompt in enumerate(prompts)
-    ]
+    def add_message(self, role: str, content: str, message_type: str = "info"):
+        """Add a message to the chat history"""
+        if role == "system":
+            content = self.terminal_print(content, message_type)
+        st.session_state.messages.append({"role": role, "content": content})
     
-    results = await asyncio.gather(*tasks)
-    return results
+    def respond(self, conversation: List[Dict], model: str = "gpt-4", temperature: float = 0.7) -> str:
+        """Call OpenAI API for chat completions"""
+        try:
+            client = OpenAI(api_key=st.session_state.api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=conversation,
+                temperature=temperature
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            self.add_message("system", f"Error calling OpenAI API: {str(e)}", "error")
+            return ""
+    
+    def save_generation_metadata(self, folder: str, data: Dict[str, Any]) -> str:
+        """Save metadata about the generation run"""
+        metadata_file = os.path.join(folder, "generation_info.txt")
+        
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            f.write("=" * 70 + "\n")
+            f.write("IMAGE GENERATION METADATA\n")
+            f.write("=" * 70 + "\n\n")
+            f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            for key, label in [
+                ('original_prompt', 'ORIGINAL PROMPT'),
+                ('clarifying_questions', 'CLARIFYING QUESTIONS (from GPT)'),
+                ('user_answers', 'USER ANSWERS'),
+                ('adjustment_request', 'ADJUSTMENT REQUEST')
+            ]:
+                if key in data and data[key]:
+                    f.write(f"{label}:\n")
+                    f.write("-" * 70 + "\n")
+                    f.write(f"{data[key]}\n\n")
+            
+            if 'generated_prompts' in data:
+                f.write("GENERATED PROMPTS:\n")
+                f.write("-" * 70 + "\n")
+                for i, prompt in enumerate(data['generated_prompts'], 1):
+                    f.write(f"{i}. {prompt}\n\n")
+            
+            f.write("=" * 70 + "\n")
+        
+        return metadata_file
+    
+    async def generate_image_async(self, prompt: str, index: int, total: int, 
+                                  run_folder: str, api_key: str) -> Dict[str, Any]:
+        """Generate a single image asynchronously"""
+        os.makedirs(run_folder, exist_ok=True)
+        
+        try:
+            self.add_message("system", f"[{index}/{total}] Generating: {prompt[:60]}...", "command")
+            
+            async_client = AsyncOpenAI(api_key=api_key)
+            
+            # Generate image using DALL-E
+            response = await async_client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                n=1,
+                size="1024x1024",
+                quality="standard",
+                response_format="b64_json"
+            )
+            
+            # Decode and save image
+            image_bytes = base64.b64decode(response.data[0].b64_json)
+            
+            # Create safe filename
+            safe_prompt = "".join(c for c in prompt[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            safe_prompt = safe_prompt.replace(' ', '_')
+            filename = f"{index:02d}_{safe_prompt}.png"
+            filepath = os.path.join(run_folder, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(image_bytes)
+            
+            self.add_message("system", f"[{index}/{total}] ✅ Saved to: {filepath}", "success")
+            
+            return {
+                'success': True,
+                'filepath': filepath,
+                'prompt': prompt,
+                'image_bytes': image_bytes
+            }
+            
+        except Exception as e:
+            self.add_message("system", f"[{index}/{total}] ❌ Error: {str(e)}", "error")
+            return {
+                'success': False,
+                'filepath': None,
+                'prompt': prompt,
+                'error': str(e)
+            }
+    
+    async def generate_images_concurrent(self, prompts: List[str], run_folder: str) -> List[Dict[str, Any]]:
+        """Generate multiple images concurrently"""
+        total = len(prompts)
+        api_key = st.session_state.api_key
+        
+        tasks = [
+            self.generate_image_async(prompt, i + 1, total, run_folder, api_key)
+            for i, prompt in enumerate(prompts)
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        return results
+    
+    def get_clarifying_questions(self, prompt: str) -> str:
+        """Get clarifying questions from GPT about the prompt"""
+        russian_instruction = ""
+        if st.session_state.russian_guardrail:
+            russian_instruction = "\n\nIMPORTANT: Any text in the image MUST be in Russian (Cyrillic script)."
+        
+        system_prompt = f"""You are an expert at creating detailed image generation prompts. 
+Your job is to help users create better prompts by asking 1-3 thoughtful clarifying questions.
 
+Ask about:
+- Style preferences (photorealistic, artistic, cartoon, etc.)
+- Mood or atmosphere
+- Important details that might be missing
+- Color preferences
+- Composition or framing
+{russian_instruction}
 
-def improve_prompt_with_gpt(
-    original_prompt: str, 
-    num_variations: int,
-    clarifying_questions: Optional[str] = None,
-    user_answers: Optional[str] = None
-) -> List[str]:
-    """Use GPT to generate improved prompt variations."""
+Keep questions concise and focused. Ask only what's necessary to significantly improve the prompt."""
+        
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"I want to generate an image with this prompt: '{prompt}'\n\nWhat questions do you have to help me create better image prompts?"}
+        ]
+        
+        return self.respond(conversation, model="gpt-4", temperature=0.7)
     
-    st.session_state.messages.append({
-        "role": "system",
-        "content": terminal_print("🤖 GPT is generating improved prompt variations...", "info")
-    })
-    
-    variation_prompt = f"""Based on the original prompt: '{original_prompt}'
-{f"And the user's additional input: {user_answers}" if user_answers else ""}
+    def improve_prompts_with_gpt(self, original_prompt: str, num_variations: int, 
+                                answers: str = "") -> List[str]:
+        """Generate improved prompt variations using GPT"""
+        russian_requirement = ""
+        if st.session_state.russian_guardrail:
+            russian_requirement = "\n\nCRITICAL: Any text visible in the image MUST be in Russian (Cyrillic script)."
+        
+        variation_prompt = f"""Based on the original prompt: '{original_prompt}'
+{f"And the user's additional input: {answers}" if answers else ""}
 
 Generate {num_variations} improved, detailed image generation prompts.
 
@@ -214,289 +235,411 @@ Each prompt should:
 - Include style, mood, lighting, and composition details
 - Be optimized for high-quality image generation
 - Offer meaningful variations (different angles, styles, or interpretations)
+{russian_requirement}
 
 Return ONLY a JSON array of strings, nothing else. Format:
-["prompt 1 here", "prompt 2 here", "prompt 3 here"]
-
-DO NOT include any markdown formatting, explanations, or text outside the JSON array."""
-    
-    conversation = [
-        {"role": "system", "content": "You are an expert at creating detailed image generation prompts. Return only valid JSON."},
-        {"role": "user", "content": variation_prompt}
-    ]
-    
-    response = respond(conversation, model="gpt-4", temperature=0.8)
-    
-    try:
-        # Clean the response
-        clean_response = response.strip()
-        if clean_response.startswith("```json"):
-            clean_response = clean_response[7:]
-        if clean_response.startswith("```"):
-            clean_response = clean_response[3:]
-        if clean_response.endswith("```"):
-            clean_response = clean_response[:-3]
-        clean_response = clean_response.strip()
+["prompt 1 here", "prompt 2 here", "prompt 3 here"]"""
         
-        variations = json.loads(clean_response)
+        conversation = [
+            {"role": "system", "content": "You are an expert at creating detailed image generation prompts. Return only valid JSON."},
+            {"role": "user", "content": variation_prompt}
+        ]
         
-        if isinstance(variations, list) and len(variations) > 0:
-            return variations[:num_variations]
-        else:
-            return [original_prompt]
+        response = self.respond(conversation, model="gpt-4", temperature=0.8)
+        
+        try:
+            # Clean response
+            clean_response = response.strip()
+            for prefix in ["```json", "```"]:
+                if clean_response.startswith(prefix):
+                    clean_response = clean_response[len(prefix):]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
             
-    except json.JSONDecodeError:
-        st.error("Failed to parse GPT response. Using original prompt.")
+            variations = json.loads(clean_response)
+            if isinstance(variations, list) and len(variations) > 0:
+                return variations[:num_variations]
+        except json.JSONDecodeError:
+            self.add_message("system", "Failed to parse GPT response. Using original prompt.", "error")
+        
         return [original_prompt]
+    
+    def adjust_prompts(self, current_prompts: List[str], adjustment: str) -> List[str]:
+        """Adjust existing prompts based on user feedback"""
+        russian_requirement = ""
+        if st.session_state.russian_guardrail:
+            russian_requirement = "\n\nCRITICAL: Maintain the requirement that ALL text in images must be in Russian."
+        
+        adjustment_prompt = f"""I have these image generation prompts:
+{chr(10).join(f'{i + 1}. {p}' for i, p in enumerate(current_prompts))}
+
+The user wants to make this adjustment: {adjustment}
+
+Generate {len(current_prompts)} ADJUSTED prompts that incorporate the user's feedback.
+{russian_requirement}
+
+Return ONLY a JSON array of strings, nothing else."""
+        
+        conversation = [
+            {"role": "system", "content": "You are an expert at refining image generation prompts. Return only valid JSON."},
+            {"role": "user", "content": adjustment_prompt}
+        ]
+        
+        response = self.respond(conversation, model="gpt-4", temperature=0.7)
+        
+        try:
+            clean_response = response.strip()
+            for prefix in ["```json", "```"]:
+                if clean_response.startswith(prefix):
+                    clean_response = clean_response[len(prefix):]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            
+            adjusted_prompts = json.loads(clean_response.strip())
+            if isinstance(adjusted_prompts, list) and len(adjusted_prompts) > 0:
+                return adjusted_prompts[:len(current_prompts)]
+        except json.JSONDecodeError:
+            self.add_message("system", "Failed to parse adjustment. Keeping current prompts.", "error")
+        
+        return current_prompts
+    
+    def process_command(self, command: str):
+        """Process user commands and prompts"""
+        cmd = command.lower().strip()
+        
+        # Handle special commands
+        if cmd in ['quit', 'exit', 'q']:
+            self.add_message("system", "👋 Goodbye! Refresh the page to start a new session.", "info")
+            st.session_state.generation_state = "ended"
+            
+        elif cmd == 'help':
+            help_text = """
+**Available Commands:**
+• **Any text** - Generate an image from your prompt
+• **improve** - Improve current prompts with GPT
+• **regenerate** - Generate more images with same prompts  
+• **adjust** - Modify current prompts
+• **variations [n]** - Set number of variations (1-10)
+• **russian on/off** - Toggle Russian text requirement
+• **clear** - Clear chat history
+• **help** - Show this help message
+• **quit/exit** - End session
+            """
+            st.session_state.messages.append({"role": "assistant", "content": help_text})
+            
+        elif cmd == 'clear':
+            st.session_state.messages = []
+            st.session_state.generated_images = []
+            self.add_message("system", "✨ Chat cleared!", "success")
+            
+        elif cmd.startswith('variations'):
+            try:
+                num = int(cmd.split()[1])
+                st.session_state.num_variations = max(1, min(10, num))
+                self.add_message("system", f"✅ Set to generate {st.session_state.num_variations} variations", "success")
+            except:
+                self.add_message("system", "Usage: variations [1-10]", "error")
+                
+        elif cmd.startswith('russian'):
+            if 'on' in cmd:
+                st.session_state.russian_guardrail = True
+                self.add_message("system", "🇷🇺 Russian text requirement ENABLED", "success")
+            elif 'off' in cmd:
+                st.session_state.russian_guardrail = False
+                self.add_message("system", "🌍 Russian text requirement DISABLED", "success")
+            else:
+                status = "ON" if st.session_state.russian_guardrail else "OFF"
+                self.add_message("system", f"Russian text requirement is {status}", "info")
+                
+        elif cmd == 'improve' and st.session_state.current_prompts:
+            st.session_state.generation_state = "improving"
+            
+        elif cmd == 'regenerate' and st.session_state.current_prompts:
+            st.session_state.generation_state = "regenerating"
+            
+        elif cmd == 'adjust' and st.session_state.current_prompts:
+            st.session_state.generation_state = "awaiting_adjustment"
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "What adjustments would you like to make to the prompts?"
+            })
+            
+        else:
+            # New image prompt
+            st.session_state.original_prompt = command
+            st.session_state.current_prompts = [command]
+            st.session_state.generation_state = "new_prompt"
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "Would you like me to improve this prompt with GPT? (yes/no)"
+            })
+            st.session_state.awaiting_response = "improve_decision"
+    
+    def run_generation(self, prompts: List[str]):
+        """Run the image generation process"""
+        # Create session folder if needed
+        if not st.session_state.session_folder:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_name = "".join(c for c in st.session_state.original_prompt[:30] 
+                               if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')
+            st.session_state.session_folder = os.path.join("generated_images", f"{timestamp}_{safe_name}")
+            os.makedirs(st.session_state.session_folder, exist_ok=True)
+        
+        # Create run folder
+        st.session_state.generation_counter += 1
+        if st.session_state.generation_counter == 1:
+            run_folder = os.path.join(st.session_state.session_folder, "initial")
+        else:
+            run_folder = os.path.join(st.session_state.session_folder, 
+                                     f"run_{st.session_state.generation_counter:02d}")
+        
+        # Save metadata
+        metadata = {
+            'original_prompt': st.session_state.original_prompt,
+            'generated_prompts': prompts,
+            'clarifying_questions': st.session_state.clarifying_questions,
+            'user_answers': st.session_state.user_answers
+        }
+        metadata_file = self.save_generation_metadata(run_folder, metadata)
+        
+        self.add_message("system", f"📁 Saving to: {run_folder}", "info")
+        self.add_message("system", f"🖼️ Generating {len(prompts)} image(s)...", "info")
+        
+        # Run async generation
+        with st.spinner(f"Generating {len(prompts)} image(s)..."):
+            results = asyncio.run(self.generate_images_concurrent(prompts, run_folder))
+        
+        # Process results
+        successful = sum(1 for r in results if r['success'])
+        failed = len(results) - successful
+        
+        self.add_message("system", "=" * 70, "info")
+        self.add_message("system", f"✨ Generation Complete!", "success")
+        self.add_message("system", f"✅ Successful: {successful}", "success")
+        if failed > 0:
+            self.add_message("system", f"❌ Failed: {failed}", "error")
+        self.add_message("system", f"📝 Metadata: {metadata_file}", "info")
+        self.add_message("system", "=" * 70, "info")
+        
+        # Store generated images
+        for result in results:
+            if result['success'] and 'image_bytes' in result:
+                st.session_state.generated_images.append({
+                    'prompt': result['prompt'],
+                    'filepath': result['filepath'],
+                    'image_bytes': result['image_bytes']
+                })
+        
+        # Offer next actions
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": """
+**What would you like to do next?**
+• Type **regenerate** to generate more with same prompts
+• Type **adjust** to modify the prompts
+• Type **improve** to enhance prompts with GPT
+• Enter a **new prompt** to start fresh
+            """
+        })
+        
+        st.session_state.generation_state = "idle"
+    
+    def render_ui(self):
+        """Render the main UI"""
+        st.title("🎨 AI Image Generator Chat Interface")
+        st.markdown("*Terminal-style chat interface with GPT-powered prompt enhancement*")
+        
+        # API Key Input Section
+        with st.container():
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                api_key = st.text_input(
+                    "🔑 Enter your OpenAI API Key:",
+                    type="password",
+                    placeholder="sk-...",
+                    help="Your API key is not stored and must be entered each session"
+                )
+            with col2:
+                st.write("")  # Spacing
+                if st.button("Set API Key", type="primary", use_container_width=True):
+                    if api_key:
+                        st.session_state.api_key = api_key
+                        self.add_message("system", "✅ API key set successfully!", "success")
+                        st.rerun()
+                    else:
+                        st.error("Please enter an API key")
+        
+        # Check for API key
+        if not st.session_state.api_key:
+            st.warning("⚠️ Please enter your OpenAI API key to continue")
+            return
+        
+        # Main layout
+        chat_col, image_col = st.columns([2, 1])
+        
+        with chat_col:
+            st.subheader("💬 Chat Terminal")
+            
+            # Display messages
+            message_container = st.container(height=500)
+            with message_container:
+                for message in st.session_state.messages:
+                    if message["role"] == "user":
+                        with st.chat_message("user"):
+                            st.write(message["content"])
+                    elif message["role"] == "assistant":
+                        with st.chat_message("assistant"):
+                            st.markdown(message["content"])
+                    elif message["role"] == "system":
+                        st.markdown(message["content"], unsafe_allow_html=True)
+            
+            # Chat input
+            if user_input := st.chat_input("Enter command or image prompt..."):
+                st.session_state.messages.append({"role": "user", "content": user_input})
+                
+                # Handle awaiting responses
+                if st.session_state.awaiting_response == "improve_decision":
+                    if user_input.lower() in ['yes', 'y']:
+                        # Get clarifying questions
+                        with st.spinner("Getting clarifying questions..."):
+                            questions = self.get_clarifying_questions(st.session_state.original_prompt)
+                            if questions:
+                                st.session_state.clarifying_questions = questions
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": f"**GPT Questions:**\n{questions}\n\nPlease answer the questions (or press Enter to skip):"
+                                })
+                                st.session_state.awaiting_response = "clarifying_answers"
+                            else:
+                                # No questions, go straight to generation
+                                st.session_state.awaiting_response = None
+                                st.session_state.generation_state = "improving"
+                    else:
+                        # Generate without improvement
+                        st.session_state.awaiting_response = None
+                        self.run_generation(st.session_state.current_prompts)
+                        
+                elif st.session_state.awaiting_response == "clarifying_answers":
+                    st.session_state.user_answers = user_input
+                    st.session_state.awaiting_response = None
+                    st.session_state.generation_state = "improving"
+                    
+                elif st.session_state.generation_state == "awaiting_adjustment":
+                    # Process adjustment
+                    with st.spinner("Adjusting prompts..."):
+                        adjusted = self.adjust_prompts(st.session_state.current_prompts, user_input)
+                        st.session_state.current_prompts = adjusted
+                        
+                        self.add_message("assistant", "✅ Adjusted prompts:")
+                        for i, p in enumerate(adjusted, 1):
+                            self.add_message("assistant", f"{i}. {p}")
+                        
+                        self.run_generation(adjusted)
+                else:
+                    # Process normal command
+                    self.process_command(user_input)
+                
+                # Handle state-based actions
+                if st.session_state.generation_state == "improving":
+                    with st.spinner("Improving prompts with GPT..."):
+                        improved = self.improve_prompts_with_gpt(
+                            st.session_state.original_prompt,
+                            st.session_state.num_variations,
+                            st.session_state.user_answers
+                        )
+                        st.session_state.current_prompts = improved
+                        
+                        self.add_message("assistant", "✅ Generated improved prompts:")
+                        for i, p in enumerate(improved, 1):
+                            self.add_message("assistant", f"{i}. {p}")
+                        
+                        self.run_generation(improved)
+                        
+                elif st.session_state.generation_state == "regenerating":
+                    self.run_generation(st.session_state.current_prompts)
+                
+                st.rerun()
+        
+        # Image display column
+        with image_col:
+            st.subheader("🖼️ Generated Images")
+            
+            if st.session_state.generated_images:
+                # Show last 5 images
+                for idx, img_data in enumerate(reversed(st.session_state.generated_images[-5:]), 1):
+                    with st.expander(f"Image: {img_data['prompt'][:30]}...", expanded=(idx==1)):
+                        st.image(img_data['image_bytes'], use_container_width=True)
+                        st.caption(f"**Prompt:** {img_data['prompt']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.download_button(
+                                label="📥 Download",
+                                data=img_data['image_bytes'],
+                                file_name=os.path.basename(img_data['filepath']),
+                                mime="image/png",
+                                use_container_width=True
+                            )
+                        with col2:
+                            if st.button(f"🔄 Regenerate", key=f"regen_{idx}", use_container_width=True):
+                                st.session_state.current_prompts = [img_data['prompt']]
+                                st.session_state.generation_state = "regenerating"
+                                st.rerun()
+            else:
+                st.info("Generated images will appear here...")
+        
+        # Sidebar
+        with st.sidebar:
+            st.header("⚙️ Settings")
+            
+            # Settings
+            st.subheader("Generation Settings")
+            num_var = st.number_input("Number of Variations", 1, 10, st.session_state.num_variations)
+            if num_var != st.session_state.num_variations:
+                st.session_state.num_variations = num_var
+            
+            russian = st.checkbox("Russian Text Requirement", st.session_state.russian_guardrail)
+            if russian != st.session_state.russian_guardrail:
+                st.session_state.russian_guardrail = russian
+            
+            st.divider()
+            
+            # Statistics
+            st.subheader("📊 Session Stats")
+            st.metric("Total Images", len(st.session_state.generated_images))
+            st.metric("Generation Runs", st.session_state.generation_counter)
+            
+            if st.button("🗑️ Clear All", use_container_width=True):
+                for key in ["messages", "generated_images", "current_prompts"]:
+                    st.session_state[key] = []
+                st.session_state.generation_counter = 0
+                st.session_state.session_folder = None
+                st.rerun()
+            
+            st.divider()
+            
+            # Instructions
+            st.subheader("📖 Quick Guide")
+            st.markdown("""
+            1. Enter your API key
+            2. Type an image prompt
+            3. Choose to improve with GPT
+            4. View & download images
+            
+            **Commands:**
+            - `help` - Show commands
+            - `improve` - Enhance prompts
+            - `regenerate` - Same prompts
+            - `adjust` - Modify prompts
+            - `clear` - Clear chat
+            """)
 
 
 def main():
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "api_key" not in st.session_state:
-        st.session_state.api_key = None
-    if "current_prompts" not in st.session_state:
-        st.session_state.current_prompts = []
-    if "generation_state" not in st.session_state:
-        st.session_state.generation_state = "idle"
-    if "generated_images" not in st.session_state:
-        st.session_state.generated_images = []
-    
-    # Title
-    st.title("🎨 AI Image Generator Chat Interface")
-    st.markdown("*Terminal-style chat interface for AI image generation*")
-    
-    # API Key Input (Always shown at the top)
-    with st.container():
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            api_key = st.text_input(
-                "🔑 Enter your OpenAI API Key:",
-                type="password",
-                placeholder="sk-...",
-                help="Your API key is not stored and must be entered each session"
-            )
-        with col2:
-            if st.button("Set API Key", type="primary"):
-                if api_key:
-                    st.session_state.api_key = api_key
-                    st.session_state.messages.append({
-                        "role": "system",
-                        "content": terminal_print("✅ API key set successfully!", "success")
-                    })
-                    st.success("API key set!")
-                else:
-                    st.error("Please enter an API key")
-    
-    # Only show the rest of the interface if API key is set
-    if not st.session_state.api_key:
-        st.warning("⚠️ Please enter your OpenAI API key to continue")
-        return
-    
-    # Create two columns for chat and images
-    chat_col, image_col = st.columns([2, 1])
-    
-    with chat_col:
-        st.subheader("💬 Chat Terminal")
-        
-        # Display chat messages
-        chat_container = st.container()
-        with chat_container:
-            for message in st.session_state.messages:
-                if message["role"] == "user":
-                    with st.chat_message("user"):
-                        st.write(message["content"])
-                elif message["role"] == "assistant":
-                    with st.chat_message("assistant"):
-                        st.write(message["content"])
-                elif message["role"] == "system":
-                    st.markdown(message["content"], unsafe_allow_html=True)
-        
-        # Chat input
-        if prompt := st.chat_input("Enter your image prompt or command..."):
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            
-            # Process the command
-            if prompt.lower() in ['quit', 'exit', 'q']:
-                st.session_state.messages.append({
-                    "role": "system",
-                    "content": terminal_print("👋 Goodbye! Refresh the page to start a new session.", "info")
-                })
-                
-            elif prompt.lower() == 'help':
-                help_text = """
-Available commands:
-- Enter any image prompt to generate images
-- 'improve' - Use GPT to improve your last prompt
-- 'regenerate' - Generate more images with the same prompts
-- 'adjust' - Adjust the current prompts
-- 'clear' - Clear the chat history
-- 'quit' / 'exit' - End the session
-                """
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": help_text
-                })
-                
-            elif prompt.lower() == 'clear':
-                st.session_state.messages = []
-                st.session_state.generated_images = []
-                st.rerun()
-                
-            elif prompt.lower() == 'improve' and st.session_state.current_prompts:
-                # Improve existing prompts
-                with st.spinner("Improving prompts..."):
-                    improved_prompts = improve_prompt_with_gpt(
-                        st.session_state.current_prompts[0] if st.session_state.current_prompts else "",
-                        3
-                    )
-                    st.session_state.current_prompts = improved_prompts
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": "✅ Improved prompts:\n" + "\n".join([f"{i+1}. {p}" for i, p in enumerate(improved_prompts)])
-                    })
-                    
-            elif prompt.lower() == 'regenerate' and st.session_state.current_prompts:
-                # Regenerate with current prompts
-                run_generation = True
-                prompts_to_generate = st.session_state.current_prompts
-                
-            else:
-                # New prompt - ask about improvements
-                st.session_state.current_prompts = [prompt]
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": "Would you like me to improve this prompt with GPT? Type 'yes' for improvements or 'no' to generate as-is."
-                })
-                
-                # Wait for user response (this will be handled in the next interaction)
-                st.session_state.generation_state = "awaiting_improve_decision"
-        
-        # Handle generation state
-        if st.session_state.generation_state == "awaiting_improve_decision":
-            if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-                last_response = st.session_state.messages[-1]["content"].lower()
-                
-                if last_response in ['yes', 'y']:
-                    with st.spinner("Improving prompts..."):
-                        improved_prompts = improve_prompt_with_gpt(
-                            st.session_state.current_prompts[0],
-                            3
-                        )
-                        st.session_state.current_prompts = improved_prompts
-                        
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": "✅ Generated improved prompts:\n" + "\n".join([f"{i+1}. {p}" for i, p in enumerate(improved_prompts)])
-                        })
-                        run_generation = True
-                        
-                elif last_response in ['no', 'n']:
-                    run_generation = True
-                else:
-                    run_generation = False
-                    
-                st.session_state.generation_state = "idle"
-                
-                # Generate images if confirmed
-                if 'run_generation' in locals() and run_generation:
-                    with st.spinner(f"Generating {len(st.session_state.current_prompts)} image(s)..."):
-                        # Create folder for this generation
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        run_folder = os.path.join("generated_images", timestamp)
-                        os.makedirs(run_folder, exist_ok=True)
-                        
-                        # Save metadata
-                        metadata = {
-                            'original_prompt': st.session_state.current_prompts[0] if st.session_state.current_prompts else "",
-                            'generated_prompts': st.session_state.current_prompts
-                        }
-                        metadata_file = save_generation_metadata(run_folder, metadata)
-                        
-                        st.session_state.messages.append({
-                            "role": "system",
-                            "content": terminal_print(f"📁 Session folder: {run_folder}", "info")
-                        })
-                        
-                        # Run async generation
-                        results = asyncio.run(generate_images_concurrent(
-                            st.session_state.current_prompts,
-                            run_folder,
-                            st.session_state.api_key
-                        ))
-                        
-                        # Process results
-                        successful = sum(1 for r in results if r['success'])
-                        failed = len(results) - successful
-                        
-                        summary = f"""
-✨ Generation Complete!
-✅ Successful: {successful}
-{f'❌ Failed: {failed}' if failed > 0 else ''}
-📝 Metadata saved to: {metadata_file}
-                        """
-                        st.session_state.messages.append({
-                            "role": "system",
-                            "content": terminal_print(summary, "success")
-                        })
-                        
-                        # Store generated images
-                        for result in results:
-                            if result['success'] and 'image_bytes' in result:
-                                st.session_state.generated_images.append({
-                                    'prompt': result['prompt'],
-                                    'filepath': result['filepath'],
-                                    'image_bytes': result['image_bytes']
-                                })
-                        
-                        st.rerun()
-    
-    # Image display column
-    with image_col:
-        st.subheader("🖼️ Generated Images")
-        
-        if st.session_state.generated_images:
-            for idx, img_data in enumerate(st.session_state.generated_images[-5:], 1):  # Show last 5 images
-                with st.expander(f"Image {idx}: {img_data['prompt'][:30]}...", expanded=True):
-                    st.image(img_data['image_bytes'], use_column_width=True)
-                    st.caption(f"Prompt: {img_data['prompt']}")
-                    st.text(f"File: {img_data['filepath']}")
-                    
-                    # Download button
-                    st.download_button(
-                        label="Download",
-                        data=img_data['image_bytes'],
-                        file_name=os.path.basename(img_data['filepath']),
-                        mime="image/png"
-                    )
-        else:
-            st.info("Generated images will appear here...")
-    
-    # Sidebar with instructions
-    with st.sidebar:
-        st.header("📖 Instructions")
-        st.markdown("""
-        1. **Enter your OpenAI API key** at the top
-        2. **Type an image prompt** in the chat
-        3. **Choose to improve** the prompt with GPT or generate as-is
-        4. **View generated images** in the right panel
-        
-        ### Commands:
-        - `help` - Show available commands
-        - `improve` - Improve current prompts
-        - `regenerate` - Generate more with same prompts
-        - `adjust` - Modify current prompts
-        - `clear` - Clear chat history
-        - `quit` / `exit` - End session
-        
-        ### Notes:
-        - Images are saved to `generated_images/` folder
-        - Metadata is saved with each generation
-        - API key is required for each session
-        """)
+    """Main application entry point"""
+    app = ImageGeneratorChat()
+    app.render_ui()
 
 
 if __name__ == "__main__":
