@@ -25,6 +25,10 @@ A Streamlit-based chat interface for AI image generation using OpenAI's DALL-E A
 
 3. **Run the application**:
    ```bash
+   streamlit run app.py
+   ```
+   or
+   ```bash
    streamlit run streamlit_image_generator.py
    ```
 
