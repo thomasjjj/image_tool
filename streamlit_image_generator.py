@@ -5,7 +5,7 @@ import json
 import asyncio
 from datetime import datetime
 from openai import AsyncOpenAI, OpenAI
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import re
 import time
 import io
@@ -86,16 +86,46 @@ class ImageGeneratorChat:
             content = self.terminal_print(content, message_type)
         st.session_state.messages.append({"role": role, "content": content})
     
-    def respond(self, conversation: List[Dict], model: str = "gpt-4", temperature: float = 0.7) -> str:
-        """Call OpenAI API for chat completions"""
+    def _format_conversation_for_responses(self, conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert legacy chat messages into the Responses API format."""
+        formatted: List[Dict[str, Any]] = []
+        for message in conversation:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            if isinstance(content, list):
+                formatted.append({"role": role, "content": content})
+            else:
+                formatted.append({
+                    "role": role,
+                    "content": [{"type": "text", "text": str(content)}]
+                })
+        return formatted
+
+    def _extract_text_from_response(self, response: Any) -> str:
+        """Safely extract text content from a Responses API response."""
+        if hasattr(response, "output_text") and response.output_text:
+            return response.output_text
+
+        text_chunks: List[str] = []
+        for item in getattr(response, "output", []) or []:
+            if getattr(item, "type", None) == "message":
+                for piece in getattr(item, "content", []) or []:
+                    if getattr(piece, "type", None) == "text":
+                        text_chunks.append(getattr(piece, "text", ""))
+
+        return "".join(text_chunks)
+
+    def respond(self, conversation: List[Dict], model: str = "gpt-4.1", temperature: float = 0.7) -> str:
+        """Call OpenAI Responses API for conversational completions."""
         try:
             client = OpenAI(api_key=st.session_state.api_key)
-            response = client.chat.completions.create(
+            formatted_input = self._format_conversation_for_responses(conversation)
+            response = client.responses.create(
                 model=model,
-                messages=conversation,
+                input=formatted_input,
                 temperature=temperature
             )
-            return response.choices[0].message.content
+            return self._extract_text_from_response(response)
         except Exception as e:
             self.add_message("system", f"Error calling OpenAI API: {str(e)}", "error")
             return ""
@@ -141,18 +171,30 @@ class ImageGeneratorChat:
             
             async_client = AsyncOpenAI(api_key=api_key)
             
-            # Generate image using DALL-E
-            response = await async_client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                n=1,
-                size="1024x1024",
-                quality="standard",
-                response_format="b64_json"
+            # Generate image using the Responses API image generation tool
+            response = await async_client.responses.create(
+                model="gpt-4.1",
+                input=prompt,
+                tools=[
+                    {
+                        "type": "image_generation",
+                        "size": "1024x1024",
+                        "quality": "high",
+                    }
+                ],
             )
-            
+
+            image_base64 = None
+            for output in getattr(response, "output", []) or []:
+                if getattr(output, "type", None) == "image_generation_call":
+                    image_base64 = getattr(output, "result", None)
+                    break
+
+            if not image_base64:
+                raise ValueError("No image data returned from the API")
+
             # Decode and save image
-            image_bytes = base64.b64decode(response.data[0].b64_json)
+            image_bytes = base64.b64decode(image_base64)
             
             # Create safe filename
             safe_prompt = "".join(c for c in prompt[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
@@ -218,7 +260,7 @@ Keep questions concise and focused. Ask only what's necessary to significantly i
             {"role": "user", "content": f"I want to generate an image with this prompt: '{prompt}'\n\nWhat questions do you have to help me create better image prompts?"}
         ]
         
-        return self.respond(conversation, model="gpt-4", temperature=0.7)
+        return self.respond(conversation, model="gpt-4.1", temperature=0.7)
     
     def improve_prompts_with_gpt(self, original_prompt: str, num_variations: int, 
                                 answers: str = "") -> List[str]:
@@ -247,7 +289,7 @@ Return ONLY a JSON array of strings, nothing else. Format:
             {"role": "user", "content": variation_prompt}
         ]
         
-        response = self.respond(conversation, model="gpt-4", temperature=0.8)
+        response = self.respond(conversation, model="gpt-4.1", temperature=0.8)
         
         try:
             # Clean response
@@ -288,7 +330,7 @@ Return ONLY a JSON array of strings, nothing else."""
             {"role": "user", "content": adjustment_prompt}
         ]
         
-        response = self.respond(conversation, model="gpt-4", temperature=0.7)
+        response = self.respond(conversation, model="gpt-4.1", temperature=0.7)
         
         try:
             clean_response = response.strip()

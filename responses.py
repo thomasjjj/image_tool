@@ -1,11 +1,11 @@
 """
 OpenAI API response handler module
-Provides utilities for interacting with OpenAI's chat completion API
+Provides utilities for interacting with OpenAI's Responses API
 """
 
 import os
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -17,143 +17,131 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _format_conversation_for_responses(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert simple role/content pairs into Responses API message format."""
+    formatted: List[Dict[str, Any]] = []
+    for message in conversation:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        if isinstance(content, list):
+            formatted.append({"role": role, "content": content})
+        else:
+            formatted.append({
+                "role": role,
+                "content": [{"type": "text", "text": str(content)}]
+            })
+    return formatted
+
+
+def _extract_text_from_response(response: Any) -> str:
+    """Safely extract assistant text from a Responses API payload."""
+    if hasattr(response, "output_text") and response.output_text:
+        return response.output_text
+
+    text_parts: List[str] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) == "message":
+            for content in getattr(item, "content", []) or []:
+                if getattr(content, "type", None) == "text":
+                    text_parts.append(getattr(content, "text", ""))
+    return "".join(text_parts)
+
+
 def respond(
-    conversation: List[Dict[str, str]], 
-    model: str = "gpt-4",
+    conversation: List[Dict[str, Any]],
+    model: str = "gpt-4.1",
     temperature: float = 0.7,
     max_tokens: Optional[int] = None,
     api_key: Optional[str] = None
 ) -> str:
-    """
-    Send a conversation to OpenAI's chat completion API and return the response.
-    
-    Args:
-        conversation: List of message dictionaries with 'role' and 'content' keys
-        model: The model to use (default: gpt-4)
-        temperature: Sampling temperature (0-2, default: 0.7)
-        max_tokens: Maximum tokens in response (default: None for model default)
-        api_key: Optional API key override (default: uses environment variable)
-    
-    Returns:
-        The assistant's response as a string
-        
-    Raises:
-        Exception: If the API call fails
-    """
+    """Send a conversation to the OpenAI Responses API and return the assistant text."""
     try:
-        # Use provided API key or get from environment
         api_key = api_key or os.getenv("OPENAI_API_KEY")
-        
+
         if not api_key:
             raise ValueError("No API key provided. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
-        
-        # Initialize OpenAI client
+
         client = OpenAI(api_key=api_key)
-        
-        # Prepare the API call parameters
-        params = {
+
+        params: Dict[str, Any] = {
             "model": model,
-            "messages": conversation,
-            "temperature": temperature
+            "input": _format_conversation_for_responses(conversation),
+            "temperature": temperature,
         }
-        
-        if max_tokens:
-            params["max_tokens"] = max_tokens
-        
-        # Make the API call
-        logger.debug(f"Calling OpenAI API with model: {model}")
-        response = client.chat.completions.create(**params)
-        
-        # Extract and return the response
-        assistant_message = response.choices[0].message.content
+
+        if max_tokens is not None:
+            params["max_output_tokens"] = max_tokens
+
+        logger.debug(f"Calling OpenAI Responses API with model: {model}")
+        response = client.responses.create(**params)
+
+        assistant_message = _extract_text_from_response(response)
         logger.debug(f"Received response of length: {len(assistant_message)}")
-        
+
         return assistant_message
-        
+
     except Exception as e:
         logger.error(f"Error in OpenAI API call: {str(e)}")
         raise
 
 
 def respond_with_functions(
-    conversation: List[Dict[str, str]],
+    conversation: List[Dict[str, Any]],
     functions: List[Dict],
-    model: str = "gpt-4",
+    model: str = "gpt-4.1",
     temperature: float = 0.7,
     api_key: Optional[str] = None
 ) -> Dict:
-    """
-    Send a conversation with function definitions to OpenAI's chat completion API.
-    
-    Args:
-        conversation: List of message dictionaries
-        functions: List of function definitions for the model to potentially call
-        model: The model to use
-        temperature: Sampling temperature
-        api_key: Optional API key override
-    
-    Returns:
-        Dictionary containing the full response including any function calls
-    """
+    """Send a conversation with tool definitions to the Responses API."""
     try:
         api_key = api_key or os.getenv("OPENAI_API_KEY")
-        
+
         if not api_key:
             raise ValueError("No API key provided.")
-        
+
         client = OpenAI(api_key=api_key)
-        
-        response = client.chat.completions.create(
+
+        response = client.responses.create(
             model=model,
-            messages=conversation,
-            functions=functions,
-            temperature=temperature
+            input=_format_conversation_for_responses(conversation),
+            tools=functions,
+            temperature=temperature,
         )
-        
+
         return response.to_dict()
-        
+
     except Exception as e:
         logger.error(f"Error in OpenAI API call with functions: {str(e)}")
         raise
 
 
 def stream_response(
-    conversation: List[Dict[str, str]],
-    model: str = "gpt-4",
+    conversation: List[Dict[str, Any]],
+    model: str = "gpt-4.1",
     temperature: float = 0.7,
     api_key: Optional[str] = None
 ):
-    """
-    Stream a response from OpenAI's chat completion API.
-    
-    Args:
-        conversation: List of message dictionaries
-        model: The model to use
-        temperature: Sampling temperature
-        api_key: Optional API key override
-    
-    Yields:
-        Chunks of the assistant's response as they arrive
-    """
+    """Stream a response from the OpenAI Responses API."""
     try:
         api_key = api_key or os.getenv("OPENAI_API_KEY")
-        
+
         if not api_key:
             raise ValueError("No API key provided.")
-        
+
         client = OpenAI(api_key=api_key)
-        
-        stream = client.chat.completions.create(
+
+        stream = client.responses.stream(
             model=model,
-            messages=conversation,
+            input=_format_conversation_for_responses(conversation),
             temperature=temperature,
-            stream=True
         )
-        
-        for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
-                
+
+        for event in stream:
+            if getattr(event, "type", None) == "response.output_text.delta":
+                yield getattr(event, "delta", "")
+            elif getattr(event, "type", None) == "response.completed":
+                break
+
     except Exception as e:
         logger.error(f"Error in streaming OpenAI API call: {str(e)}")
         raise
@@ -161,11 +149,11 @@ def stream_response(
 
 # Model name mappings for compatibility
 MODEL_MAPPINGS = {
-    "gpt-5": "gpt-4",  # Map GPT-5 to GPT-4 since GPT-5 doesn't exist yet
-    "gpt-4": "gpt-4",
-    "gpt-4-turbo": "gpt-4-turbo-preview",
-    "gpt-3.5": "gpt-3.5-turbo",
-    "gpt-3": "gpt-3.5-turbo"
+    "gpt-5": "gpt-4.1",  # Map legacy aliases to current flagship models
+    "gpt-4": "gpt-4.1",
+    "gpt-4-turbo": "gpt-4.1-mini",
+    "gpt-3.5": "gpt-4.1-mini",
+    "gpt-3": "gpt-4.1-mini",
 }
 
 
@@ -185,7 +173,7 @@ def get_model_name(requested_model: str) -> str:
 # Override the default respond function to handle model mapping
 _original_respond = respond
 
-def respond(conversation: List[Dict[str, str]], model: str = "gpt-4", **kwargs) -> str:
+def respond(conversation: List[Dict[str, Any]], model: str = "gpt-4.1", **kwargs) -> str:
     """
     Enhanced respond function with model name mapping.
     """
