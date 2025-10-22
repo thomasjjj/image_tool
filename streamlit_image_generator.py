@@ -8,6 +8,8 @@ from openai import AsyncOpenAI, OpenAI
 from typing import List, Dict, Any, Optional
 import re
 import time
+import io
+import zipfile
 
 # Configure Streamlit page
 st.set_page_config(
@@ -423,13 +425,41 @@ Return ONLY a JSON array of strings, nothing else."""
         self.add_message("system", "=" * 70, "info")
         
         # Store generated images
+        successful_results = []
         for result in results:
             if result['success'] and 'image_bytes' in result:
-                st.session_state.generated_images.append({
+                image_entry = {
                     'prompt': result['prompt'],
                     'filepath': result['filepath'],
                     'image_bytes': result['image_bytes']
-                })
+                }
+                st.session_state.generated_images.append(image_entry)
+                successful_results.append(image_entry)
+
+        if successful_results:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for image in successful_results:
+                    zipf.writestr(os.path.basename(image['filepath']), image['image_bytes'])
+            zip_buffer.seek(0)
+
+            gallery_id = f"run_{st.session_state.generation_counter:02d}_{int(time.time()*1000)}"
+            st.session_state.messages.append({
+                "role": "assistant",
+                "type": "image_gallery",
+                "id": gallery_id,
+                "title": f"🎉 Generated {len(successful_results)} image{'s' if len(successful_results) != 1 else ''}",
+                "images": [
+                    {
+                        "prompt": image['prompt'],
+                        "image_bytes": image['image_bytes'],
+                        "filename": os.path.basename(image['filepath'])
+                    }
+                    for image in successful_results
+                ],
+                "zip_data": zip_buffer.getvalue(),
+                "zip_name": f"{os.path.basename(run_folder)}.zip"
+            })
         
         # Offer next actions
         st.session_state.messages.append({
@@ -489,8 +519,31 @@ Return ONLY a JSON array of strings, nothing else."""
                         with st.chat_message("user"):
                             st.write(message["content"])
                     elif message["role"] == "assistant":
-                        with st.chat_message("assistant"):
-                            st.markdown(message["content"])
+                        if message.get("type") == "image_gallery":
+                            with st.chat_message("assistant"):
+                                st.markdown(message.get("title", "**Generated Images**"))
+                                for idx, image in enumerate(message.get("images", []), 1):
+                                    st.image(image["image_bytes"], use_column_width=True)
+                                    st.caption(f"**Prompt:** {image['prompt']}")
+                                    st.download_button(
+                                        label="📥 Download",
+                                        data=image["image_bytes"],
+                                        file_name=image["filename"],
+                                        mime="image/png",
+                                        key=f"download_{message['id']}_{idx}"
+                                    )
+
+                                if message.get("zip_data"):
+                                    st.download_button(
+                                        label="📦 Download All",
+                                        data=message["zip_data"],
+                                        file_name=message.get("zip_name", "generated_images.zip"),
+                                        mime="application/zip",
+                                        key=f"download_all_{message['id']}"
+                                    )
+                        else:
+                            with st.chat_message("assistant"):
+                                st.markdown(message["content"])
                     elif message["role"] == "system":
                         st.markdown(message["content"], unsafe_allow_html=True)
             
