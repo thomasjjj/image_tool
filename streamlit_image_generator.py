@@ -393,9 +393,12 @@ Return ONLY a JSON array of strings, nothing else."""
         if st.session_state.generation_counter == 1:
             run_folder = os.path.join(st.session_state.session_folder, "initial")
         else:
-            run_folder = os.path.join(st.session_state.session_folder, 
+            run_folder = os.path.join(st.session_state.session_folder,
                                      f"run_{st.session_state.generation_counter:02d}")
-        
+
+        # Ensure the run folder exists before attempting to save any files
+        os.makedirs(run_folder, exist_ok=True)
+
         # Save metadata
         metadata = {
             'original_prompt': st.session_state.original_prompt,
