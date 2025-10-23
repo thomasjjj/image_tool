@@ -14,28 +14,88 @@ import zipfile
 # Configure Streamlit page
 st.set_page_config(
     page_title="AI Image Generator Chat",
-    page_icon="🎨",
+    page_icon="AI",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for terminal-like appearance and better UI
+# Custom CSS for refined appearance and improved layout
 st.markdown("""
 <style>
-.terminal-text {
-    font-family: 'Courier New', monospace;
-    background-color: #1e1e1e;
-    color: #00ff00;
-    padding: 10px;
-    border-radius: 5px;
-    margin: 5px 0;
+:root {
+    --primary-color: #2f4cdd;
+    --accent-color: #1f2937;
+    --background-color: #f5f7fb;
+    --card-border: #d8dde6;
 }
-.command-text { color: #ffff00; }
-.system-message { color: #00ffff; }
-.error-message { color: #ff0000; }
-.success-message { color: #00ff00; }
+
+html, body {
+    background-color: var(--background-color);
+    color: var(--accent-color);
+    font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+.block-container {
+    padding: 2.5rem 3rem 3rem;
+    max-width: 1400px;
+}
+
+.message-card {
+    background: #ffffff;
+    border-radius: 10px;
+    border: 1px solid var(--card-border);
+    padding: 12px 16px;
+    margin: 10px 0;
+    box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.message-card.info {
+    border-left: 4px solid var(--primary-color);
+}
+
+.message-card.command {
+    border-left: 4px solid #2563eb;
+    color: #1f2937;
+    background: #eff6ff;
+}
+
+.message-card.error {
+    border-left: 4px solid #dc2626;
+    color: #7f1d1d;
+    background: #fef2f2;
+}
+
+.message-card.success {
+    border-left: 4px solid #16a34a;
+    color: #14532d;
+    background: #f0fdf4;
+}
+
 .stButton > button {
     width: 100%;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.stChatMessage {
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+}
+
+.stChatMessage .stMarkdown p {
+    color: #1f2937;
+}
+
+.st-expander {
+    border-radius: 10px !important;
+    border: 1px solid var(--card-border) !important;
+}
+
+.stMetricDelta {
+    font-weight: 600;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -72,13 +132,13 @@ class ImageGeneratorChat:
     def terminal_print(self, message: str, message_type: str = "info") -> str:
         """Display a terminal-like message"""
         color_map = {
-            "info": "system-message",
-            "command": "command-text",
-            "error": "error-message",
-            "success": "success-message"
+            "info": "info",
+            "command": "command",
+            "error": "error",
+            "success": "success"
         }
-        color_class = color_map.get(message_type, "system-message")
-        return f'<div class="terminal-text"><span class="{color_class}">{message}</span></div>'
+        color_class = color_map.get(message_type, "info")
+        return f'<div class="message-card {color_class}">{message}</div>'
     
     def add_message(self, role: str, content: str, message_type: str = "info"):
         """Add a message to the chat history"""
@@ -205,7 +265,7 @@ class ImageGeneratorChat:
             with open(filepath, "wb") as f:
                 f.write(image_bytes)
             
-            self.add_message("system", f"[{index}/{total}] ✅ Saved to: {filepath}", "success")
+            self.add_message("system", f"[{index}/{total}] Saved to: {filepath}", "success")
             
             return {
                 'success': True,
@@ -215,7 +275,7 @@ class ImageGeneratorChat:
             }
             
         except Exception as e:
-            self.add_message("system", f"[{index}/{total}] ❌ Error: {str(e)}", "error")
+            self.add_message("system", f"[{index}/{total}] Error: {str(e)}", "error")
             return {
                 'success': False,
                 'filepath': None,
@@ -354,7 +414,7 @@ Return ONLY a JSON array of strings, nothing else."""
         
         # Handle special commands
         if cmd in ['quit', 'exit', 'q']:
-            self.add_message("system", "👋 Goodbye! Refresh the page to start a new session.", "info")
+            self.add_message("system", "Goodbye! Refresh the page to start a new session.", "info")
             st.session_state.generation_state = "ended"
             
         elif cmd == 'help':
@@ -375,23 +435,23 @@ Return ONLY a JSON array of strings, nothing else."""
         elif cmd == 'clear':
             st.session_state.messages = []
             st.session_state.generated_images = []
-            self.add_message("system", "✨ Chat cleared!", "success")
+            self.add_message("system", "Chat history cleared.", "success")
             
         elif cmd.startswith('variations'):
             try:
                 num = int(cmd.split()[1])
                 st.session_state.num_variations = max(1, min(10, num))
-                self.add_message("system", f"✅ Set to generate {st.session_state.num_variations} variations", "success")
+                self.add_message("system", f"Set to generate {st.session_state.num_variations} variations.", "success")
             except:
                 self.add_message("system", "Usage: variations [1-10]", "error")
                 
         elif cmd.startswith('russian'):
             if 'on' in cmd:
                 st.session_state.russian_guardrail = True
-                self.add_message("system", "🇷🇺 Russian text requirement ENABLED", "success")
+                self.add_message("system", "Russian text requirement enabled.", "success")
             elif 'off' in cmd:
                 st.session_state.russian_guardrail = False
-                self.add_message("system", "🌍 Russian text requirement DISABLED", "success")
+                self.add_message("system", "Russian text requirement disabled.", "success")
             else:
                 status = "ON" if st.session_state.russian_guardrail else "OFF"
                 self.add_message("system", f"Russian text requirement is {status}", "info")
@@ -450,8 +510,8 @@ Return ONLY a JSON array of strings, nothing else."""
         }
         metadata_file = self.save_generation_metadata(run_folder, metadata)
         
-        self.add_message("system", f"📁 Saving to: {run_folder}", "info")
-        self.add_message("system", f"🖼️ Generating {len(prompts)} image(s)...", "info")
+        self.add_message("system", f"Session folder: {run_folder}", "info")
+        self.add_message("system", f"Generating {len(prompts)} image(s)...", "info")
         
         # Run async generation
         with st.spinner(f"Generating {len(prompts)} image(s)..."):
@@ -462,11 +522,11 @@ Return ONLY a JSON array of strings, nothing else."""
         failed = len(results) - successful
         
         self.add_message("system", "=" * 70, "info")
-        self.add_message("system", f"✨ Generation Complete!", "success")
-        self.add_message("system", f"✅ Successful: {successful}", "success")
+        self.add_message("system", "Generation complete.", "success")
+        self.add_message("system", f"Successful images: {successful}", "success")
         if failed > 0:
-            self.add_message("system", f"❌ Failed: {failed}", "error")
-        self.add_message("system", f"📝 Metadata: {metadata_file}", "info")
+            self.add_message("system", f"Failed generations: {failed}", "error")
+        self.add_message("system", f"Metadata file: {metadata_file}", "info")
         self.add_message("system", "=" * 70, "info")
         
         # Store generated images
@@ -493,7 +553,7 @@ Return ONLY a JSON array of strings, nothing else."""
                 "role": "assistant",
                 "type": "image_gallery",
                 "id": gallery_id,
-                "title": f"🎉 Generated {len(successful_results)} image{'s' if len(successful_results) != 1 else ''}",
+                "title": f"Generated {len(successful_results)} image{'s' if len(successful_results) != 1 else ''}",
                 "images": [
                     {
                         "prompt": image['prompt'],
@@ -522,15 +582,15 @@ Return ONLY a JSON array of strings, nothing else."""
     
     def render_ui(self):
         """Render the main UI"""
-        st.title("🎨 AI Image Generator Chat Interface")
-        st.markdown("*Terminal-style chat interface with GPT-powered prompt enhancement*")
+        st.title("AI Image Generator Workspace")
+        st.markdown("*Enhance prompts and generate images with a streamlined workflow.*")
         
         # API Key Input Section
         with st.container():
             col1, col2 = st.columns([3, 1])
             with col1:
                 api_key = st.text_input(
-                    "🔑 Enter your OpenAI API Key:",
+                    "Enter your OpenAI API Key:",
                     type="password",
                     placeholder="sk-...",
                     help="Your API key is not stored and must be entered each session"
@@ -540,21 +600,21 @@ Return ONLY a JSON array of strings, nothing else."""
                 if st.button("Set API Key", type="primary", use_container_width=True):
                     if api_key:
                         st.session_state.api_key = api_key
-                        self.add_message("system", "✅ API key set successfully!", "success")
+                        self.add_message("system", "API key set successfully.", "success")
                         st.rerun()
                     else:
                         st.error("Please enter an API key")
-        
+
         # Check for API key
         if not st.session_state.api_key:
-            st.warning("⚠️ Please enter your OpenAI API key to continue")
+            st.warning("Please enter your OpenAI API key to continue.")
             return
-        
+
         # Main layout
-        chat_col, image_col = st.columns([2, 1])
-        
+        chat_col, image_col = st.columns([3, 2])
+
         with chat_col:
-            st.subheader("💬 Chat Terminal")
+            st.subheader("Conversation")
             
             # Display messages
             message_container = st.container(height=500)
@@ -571,7 +631,7 @@ Return ONLY a JSON array of strings, nothing else."""
                                     st.image(image["image_bytes"], use_column_width=True)
                                     st.caption(f"**Prompt:** {image['prompt']}")
                                     st.download_button(
-                                        label="📥 Download",
+                                        label="Download",
                                         data=image["image_bytes"],
                                         file_name=image["filename"],
                                         mime="image/png",
@@ -580,7 +640,7 @@ Return ONLY a JSON array of strings, nothing else."""
 
                                 if message.get("zip_data"):
                                     st.download_button(
-                                        label="📦 Download All",
+                                        label="Download All",
                                         data=message["zip_data"],
                                         file_name=message.get("zip_name", "generated_images.zip"),
                                         mime="application/zip",
@@ -629,7 +689,7 @@ Return ONLY a JSON array of strings, nothing else."""
                         adjusted = self.adjust_prompts(st.session_state.current_prompts, user_input)
                         st.session_state.current_prompts = adjusted
                         
-                        self.add_message("assistant", "✅ Adjusted prompts:")
+                        self.add_message("assistant", "Adjusted prompts:")
                         for i, p in enumerate(adjusted, 1):
                             self.add_message("assistant", f"{i}. {p}")
                         
@@ -648,7 +708,7 @@ Return ONLY a JSON array of strings, nothing else."""
                         )
                         st.session_state.current_prompts = improved
                         
-                        self.add_message("assistant", "✅ Generated improved prompts:")
+                        self.add_message("assistant", "Generated improved prompts:")
                         for i, p in enumerate(improved, 1):
                             self.add_message("assistant", f"{i}. {p}")
                         
@@ -661,7 +721,7 @@ Return ONLY a JSON array of strings, nothing else."""
         
         # Image display column
         with image_col:
-            st.subheader("🖼️ Generated Images")
+            st.subheader("Generated Images")
             
             if st.session_state.generated_images:
                 # Show last 5 images
@@ -669,18 +729,18 @@ Return ONLY a JSON array of strings, nothing else."""
                     with st.expander(f"Image: {img_data['prompt'][:30]}...", expanded=(idx==1)):
                         st.image(img_data['image_bytes'], use_container_width=True)
                         st.caption(f"**Prompt:** {img_data['prompt']}")
-                        
+
                         col1, col2 = st.columns(2)
                         with col1:
                             st.download_button(
-                                label="📥 Download",
+                                label="Download",
                                 data=img_data['image_bytes'],
                                 file_name=os.path.basename(img_data['filepath']),
                                 mime="image/png",
                                 use_container_width=True
                             )
                         with col2:
-                            if st.button(f"🔄 Regenerate", key=f"regen_{idx}", use_container_width=True):
+                            if st.button("Regenerate", key=f"regen_{idx}", use_container_width=True):
                                 st.session_state.current_prompts = [img_data['prompt']]
                                 st.session_state.generation_state = "regenerating"
                                 st.rerun()
@@ -689,7 +749,7 @@ Return ONLY a JSON array of strings, nothing else."""
         
         # Sidebar
         with st.sidebar:
-            st.header("⚙️ Settings")
+            st.header("Settings")
             
             # Settings
             st.subheader("Generation Settings")
@@ -704,21 +764,21 @@ Return ONLY a JSON array of strings, nothing else."""
             st.divider()
             
             # Statistics
-            st.subheader("📊 Session Stats")
+            st.subheader("Session Statistics")
             st.metric("Total Images", len(st.session_state.generated_images))
             st.metric("Generation Runs", st.session_state.generation_counter)
-            
-            if st.button("🗑️ Clear All", use_container_width=True):
+
+            if st.button("Clear All Data", use_container_width=True):
                 for key in ["messages", "generated_images", "current_prompts"]:
                     st.session_state[key] = []
                 st.session_state.generation_counter = 0
                 st.session_state.session_folder = None
                 st.rerun()
-            
+
             st.divider()
-            
+
             # Instructions
-            st.subheader("📖 Quick Guide")
+            st.subheader("Quick Guide")
             st.markdown("""
             1. Enter your API key
             2. Type an image prompt
