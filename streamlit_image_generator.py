@@ -62,7 +62,9 @@ class ImageGeneratorChat:
             "generation_counter": 0,
             "session_folder": None,
             "russian_guardrail": False,
-            "num_variations": 3
+            "num_variations": 3,
+            "image_size": "1024x1024",
+            "image_quality": "high",
         }
         
         for key, default_value in defaults.items():
@@ -156,9 +158,22 @@ class ImageGeneratorChat:
                 f.write("-" * 70 + "\n")
                 for i, prompt in enumerate(data['generated_prompts'], 1):
                     f.write(f"{i}. {prompt}\n\n")
-            
+
+            settings = []
+            if data.get('image_size'):
+                settings.append(("Image Size", data['image_size']))
+            if data.get('image_quality'):
+                settings.append(("Image Quality", data['image_quality']))
+
+            if settings:
+                f.write("GENERATION SETTINGS:\n")
+                f.write("-" * 70 + "\n")
+                for label, value in settings:
+                    f.write(f"{label}: {value}\n")
+                f.write("\n")
+
             f.write("=" * 70 + "\n")
-        
+
         return metadata_file
     
     async def generate_image_async(self, prompt: str, index: int, total: int, 
@@ -167,7 +182,14 @@ class ImageGeneratorChat:
         os.makedirs(run_folder, exist_ok=True)
         
         try:
-            self.add_message("system", f"[{index}/{total}] Generating: {prompt[:60]}...", "command")
+            settings_summary = (
+                f"size={st.session_state.image_size}, quality={st.session_state.image_quality}"
+            )
+            self.add_message(
+                "system",
+                f"[{index}/{total}] Generating ({settings_summary}): {prompt[:60]}...",
+                "command",
+            )
             
             async_client = AsyncOpenAI(api_key=api_key)
             
@@ -178,8 +200,8 @@ class ImageGeneratorChat:
                 tools=[
                     {
                         "type": "image_generation",
-                        "size": "1024x1024",
-                        "quality": "high",
+                        "size": st.session_state.image_size,
+                        "quality": st.session_state.image_quality,
                     }
                 ],
             )
@@ -446,12 +468,19 @@ Return ONLY a JSON array of strings, nothing else."""
             'original_prompt': st.session_state.original_prompt,
             'generated_prompts': prompts,
             'clarifying_questions': st.session_state.clarifying_questions,
-            'user_answers': st.session_state.user_answers
+            'user_answers': st.session_state.user_answers,
+            'image_size': st.session_state.image_size,
+            'image_quality': st.session_state.image_quality,
         }
         metadata_file = self.save_generation_metadata(run_folder, metadata)
-        
+
         self.add_message("system", f"📁 Saving to: {run_folder}", "info")
         self.add_message("system", f"🖼️ Generating {len(prompts)} image(s)...", "info")
+        self.add_message(
+            "system",
+            f"🎯 Using settings → size: {st.session_state.image_size}, quality: {st.session_state.image_quality}",
+            "info",
+        )
         
         # Run async generation
         with st.spinner(f"Generating {len(prompts)} image(s)..."):
@@ -696,7 +725,32 @@ Return ONLY a JSON array of strings, nothing else."""
             num_var = st.number_input("Number of Variations", 1, 10, st.session_state.num_variations)
             if num_var != st.session_state.num_variations:
                 st.session_state.num_variations = num_var
-            
+
+            size_options = ["1024x1024", "1152x896", "896x1152"]
+            size_index = 0
+            if st.session_state.image_size in size_options:
+                size_index = size_options.index(st.session_state.image_size)
+            selected_size = st.selectbox("Image Size", size_options, index=size_index)
+            if selected_size != st.session_state.image_size:
+                st.session_state.image_size = selected_size
+
+            quality_options = ["high", "standard"]
+            quality_labels = {
+                "high": "High (best detail)",
+                "standard": "Standard (faster)",
+            }
+            quality_index = 0
+            if st.session_state.image_quality in quality_options:
+                quality_index = quality_options.index(st.session_state.image_quality)
+            selected_quality = st.selectbox(
+                "Image Quality",
+                quality_options,
+                index=quality_index,
+                format_func=lambda opt: quality_labels.get(opt, opt.title()),
+            )
+            if selected_quality != st.session_state.image_quality:
+                st.session_state.image_quality = selected_quality
+
             russian = st.checkbox("Russian Text Requirement", st.session_state.russian_guardrail)
             if russian != st.session_state.russian_guardrail:
                 st.session_state.russian_guardrail = russian
